@@ -1,0 +1,14 @@
+# Node
+node_modules/
+npm-debug.log
+
+# CDK
+cdk.out/
+*.d.ts
+
+# Build artifacts
+dist/
+build/
+
+# OS
+.DS_Store
