@@ -1,0 +1,79 @@
+import { Construct } from "constructs";
+import { Asset } from "aws-cdk-lib/aws-s3-assets";
+import { md5hash } from "aws-cdk-lib/core/lib/helpers-internal";
+import { S3Code, Code } from "aws-cdk-lib/aws-lambda";
+import {
+    AssetHashType,
+    aws_s3_assets,
+    BundlingOutput,
+    DockerImage
+}
+    from "aws-cdk-lib";
+
+import * as fs from "fs";
+import * as path from "path";
+
+function calculateHash(paths: string[]): string {
+    return paths.reduce((mh, p) => {
+        const dirs = fs.readdirSync(p);
+        const hash = calculateHash(
+            dirs
+                .filter((d) => fs.statSync(path.join(p, d)).isDirectory())
+                .map((v) => path.join(p, v))
+        );
+        return md5hash(
+            mh +
+            dirs
+                .filter((d) => fs.statSync(path.join(p, d)).isFile())
+                .reduce((h, f) => {
+                    return md5hash(h + fs.readFileSync(path.join(p, f)));
+                }, hash)
+        );
+    }, "");
+}
+
+export class SharedAssetBundler extends Construct {
+    private readonly sharedAssets: string[];
+    private readonly WORKING_PATH = "/asset-input/";
+
+    constructor(scope: Construct, id: string, sharedAssets: string[]) {
+        super(scope, id);
+
+        this.sharedAssets = sharedAssets
+    }
+
+    bundleWithAsset(assetPath: string): Asset {
+        console.log(assetPath, calculateHash([assetPath, ...this.sharedAssets]));
+        const asset = new aws_s3_assets.Asset(
+            this,
+            md5hash(assetPath).slice(0, 6),
+            {
+                path: assetPath,
+                bundling: {
+                    image: DockerImage.fromBuild(path.posix.join(__dirname, 'alpine-zip')),
+                    command: [
+                        "zip",
+                        "-r",
+                        "-9",
+                        path.posix.join("/asset-output", "asset.zip"),
+                        "."
+                    ],
+                    volumes: this.sharedAssets.map((f) => ({
+                        containerPath: path.posix.join(this.WORKING_PATH, path.basename(f)),
+                        hostPath: f
+                    })),
+                    workingDirectory: this.WORKING_PATH,
+                    outputType: BundlingOutput.ARCHIVED
+                },
+                assetHash: calculateHash([assetPath, ...this.sharedAssets]),
+                assetHashType: AssetHashType.CUSTOM,
+            }
+        )
+        return asset
+    }
+
+    bundleWithLambdaAsset(assetPath: string): S3Code {
+        const asset = this.bundleWithAsset(assetPath)
+        return Code.fromBucket(asset.bucket, asset.s3ObjectKey)
+    }
+}
